@@ -1,0 +1,29 @@
+{
+  "name": "remotequery-mysql",
+  "version": "0.0.5",
+  "description": "mysql driver component for remotequery",
+  "main": "remotequery-mysql.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tonibuenter/remote-query-js-mysql.git"
+  },
+  "keywords": [
+    "sql",
+    "addon",
+    "remotequery"
+  ],
+  "author": "Toni A. Buenter",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/tonibuenter/remote-query-js-mysql/issues"
+  },
+  "homepage": "https://github.com/tonibuenter/remote-query-js-mysql#readme",
+  "dependencies": {
+    "camelcase": "^5.3.1",
+    "pino": "^5.16.0",
+    "remotequery": "^0.0.1"
+  }
+}
