@@ -54,7 +54,11 @@ Config.datasource = {
         });
     },
     'returnConnection': function (con) {
-        con.release();
+        try {
+            con.release();
+        } catch (e) {
+            Config.logger.error('returnConnection ->', e);
+        }
         Config.logger.debug('returnConnection DONE');
     }
 };
@@ -89,13 +93,12 @@ module.exports.processSql = processSql;
 
 
 async function processSqlDirect(sql, parameters, maxRows) {
-
-    var con, result;
+    let con, result;
     try {
         con = await Config.datasource.getConnection();
         result = await processSqlQuery(con, sql, parameters, maxRows)
     } catch (err) {
-        Config.logger.info(err.stack);
+        Config.logger.error(err.stack);
         result = {'exception': err.message, 'stack': err.stack}
     } finally {
         Config.datasource.returnConnection(con)
@@ -104,21 +107,6 @@ async function processSqlDirect(sql, parameters, maxRows) {
 }
 
 module.exports.processSqlDirect = processSqlDirect;
-
-
-// function processSqlCon(con, sql, parameters, maxRows) {
-//     return new Promise((resolve, reject) => {
-//         processSql_con(con, sql, parameters, maxRows, cb);
-//         function cb(result) {
-//             if (result == undefined) {
-//                 reject('Error');
-//             } else {
-//                 resolve(result);
-//             }
-//         }
-//     });
-// }
-// module.exports.processSqlCon = processSqlCon;
 
 
 async function processSql_con(con, sql, parameters, maxRows) {
