@@ -1,6 +1,6 @@
 {
   "name": "remotequery-mysql",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "mysql driver component for remotequery",
   "main": "remotequery-mysql.js",
   "scripts": {
