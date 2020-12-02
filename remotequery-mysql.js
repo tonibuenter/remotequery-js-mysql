@@ -10,7 +10,14 @@ const Config = {
   logger: null,
   sqlLogger: null
 };
-module.exports.Config = Config;
+module.exports = {
+  Config,
+  processSql,
+  processSqlDirect,
+  namedParameters2QuestionMarks,
+  processSqlDirectNP,
+  processSqlQuery
+};
 
 Config.logger = pino({
   level: 'info',
@@ -82,13 +89,11 @@ async function processSql(sql, parameters, maxRows) {
   return result;
 }
 
-module.exports.processSql = processSql;
-
-async function processSqlDirect(sql, parameters, maxRows) {
+async function processSqlDirect(sql, values, maxRows) {
   let con, result;
   try {
     con = await Config.datasource.getConnection();
-    result = await processSqlQuery(con, sql, parameters, maxRows);
+    result = await processSqlQuery(con, sql, values, maxRows);
   } catch (err) {
     Config.logger.error(err.stack);
     result = { exception: err.message, stack: err.stack };
@@ -98,7 +103,88 @@ async function processSqlDirect(sql, parameters, maxRows) {
   return result;
 }
 
-module.exports.processSqlDirect = processSqlDirect;
+async function processSqlDirectNP(sql, parametersList, maxRows) {
+  let con,
+    result,
+    newSql,
+    valuesList = [];
+
+  for (let parameters of parametersList) {
+    let { qmSql, values } = convertNamedParameterToValues(sql, parameters);
+    valuesList.push(values);
+    if (!newSql) {
+      newSql = qmSql;
+    }
+  }
+
+  try {
+    con = await Config.datasource.getConnection();
+    result = await processSqlQuery(con, newSql, valuesList, maxRows);
+  } catch (err) {
+    Config.logger.error(err.stack);
+    result = { exception: err.message, stack: err.stack };
+  } finally {
+    Config.datasource.returnConnection(con);
+  }
+  return result;
+}
+
+function namedParameters2QuestionMarks(sql, parameters) {
+  let parametersUsed = {};
+  let values = [];
+  let sqlqm = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (txt, key, key2) {
+    let p = parameters[key];
+    p = typeof p === 'string' ? p.trim() : typeof (p === 'number') ? p : p === null || p === undefined ? '' : p;
+    let qms = '';
+    if (key2 === '[]' || Array.isArray(p)) {
+      let vList = Array.isArray(p) ? p : p.split(/\s*,\s*/);
+      vList.forEach((v, index) => {
+        v = v.trim();
+        parametersUsed[key + index] = v;
+        values.push(v);
+        if (index !== 0) {
+          qms += ', ';
+        }
+        qms += '?';
+      });
+    } else {
+      parametersUsed[key] = p;
+      values.push(p);
+      qms += '?';
+    }
+    return qms;
+  });
+  return { sqlqm, parametersUsed, values };
+}
+
+function convertNamedParameterToValues(sql, parameters) {
+  let parametersUsed = {};
+  let values = [];
+
+  let qmSql = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (txt, key, key2) {
+    let p = (parameters[key] || '').trim();
+    let qms = '';
+    if (key2 === '[]') {
+      let vList = p.split(/\s*,\s*/);
+      vList.forEach((v, index) => {
+        v = v.trim();
+        parametersUsed[key + index] = v;
+        values.push(v);
+        if (index !== 0) {
+          qms += ', ';
+        }
+        qms += '?';
+      });
+    } else {
+      parametersUsed[key] = p.trim();
+      values.push(p);
+      qms += '?';
+    }
+    return qms;
+  });
+
+  return { qmSql, values, parametersUsed };
+}
 
 async function processSql_con(con, sql, parameters, maxRows) {
   parameters = parameters || {};
@@ -182,8 +268,6 @@ function processSqlQuery(con, sql, values, maxRows) {
   });
 }
 
-module.exports.processSqlQuery = processSqlQuery;
-
 class QueryAndParams {
   constructor(named_query, req_params) {
     this.named_query = named_query;
@@ -228,14 +312,14 @@ class QueryAndParams {
 
   _process_param() {
     const param = this.current_param;
-    if (param.endsWith('[]')) {
-      let param_base = param.substring(0, param.length - 2);
-      let a_value = this.req_params[param_base];
+    let param_base = param.substring(0, param.length - 2);
+    let a_value = this.req_params[param_base];
+    if (param.endsWith('[]') || Array.isArray(a_value)) {
       if (a_value === undefined) {
         this.param_list.push(param);
         this.qm_query += '?';
       } else {
-        let request_values = a_value.split(',');
+        let request_values = Array.isArray(a_value) ? a_value : a_value.split(',');
         let index = 0;
         for (let request_value of request_values) {
           let param_indexed = param_base + '[' + index + ']';
