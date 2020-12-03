@@ -10,13 +10,38 @@ const Config = {
   logger: null,
   sqlLogger: null
 };
+
+function init({ user, password, host, database, logger, sqlLogger }) {
+  Config.user = user;
+  Config.password = password;
+  Config.host = host;
+  Config.database = database;
+  Config.logger =
+    logger ||
+    pino({
+      level: 'info',
+      prettyPrint: {
+        colorize: true
+      }
+    });
+  Config.sqlLogger =
+    sqlLogger ||
+    pino({
+      level: 'info',
+      prettyPrint: {
+        colorize: true
+      }
+    });
+  return Config.initPool();
+}
+
 module.exports = {
   Config,
   processSql,
   processSqlDirect,
   namedParameters2QuestionMarks,
-  processSqlDirectNP,
-  processSqlQuery
+  processSqlQuery,
+  init
 };
 
 Config.logger = pino({
@@ -89,7 +114,7 @@ async function processSql(sql, parameters, maxRows) {
   return result;
 }
 
-async function processSqlDirect(sql, values, maxRows) {
+async function processSqlDirect(sql, values = [], maxRows) {
   let con, result;
   try {
     con = await Config.datasource.getConnection();
@@ -103,47 +128,20 @@ async function processSqlDirect(sql, values, maxRows) {
   return result;
 }
 
-async function processSqlDirectNP(sql, parametersList, maxRows) {
-  let con,
-    result,
-    newSql,
-    valuesList = [];
-
-  for (let parameters of parametersList) {
-    let { qmSql, values } = convertNamedParameterToValues(sql, parameters);
-    valuesList.push(values);
-    if (!newSql) {
-      newSql = qmSql;
-    }
-  }
-
-  try {
-    con = await Config.datasource.getConnection();
-    result = await processSqlQuery(con, newSql, valuesList, maxRows);
-  } catch (err) {
-    Config.logger.error(err.stack);
-    result = { exception: err.message, stack: err.stack };
-  } finally {
-    Config.datasource.returnConnection(con);
-  }
-  return result;
-}
-
 function namedParameters2QuestionMarks(sql, parameters) {
   let parametersUsed = {};
   let values = [];
-  let sqlqm = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (txt, key, key2) {
+  let sqlQm = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (mtch, key, brck) {
     let p = parameters[key];
     p = typeof p === 'string' ? p.trim() : typeof (p === 'number') ? p : p === null || p === undefined ? '' : p;
     let qms = '';
-    if (key2 === '[]' || Array.isArray(p)) {
-      let vList = Array.isArray(p) ? p : p.split(/\s*,\s*/);
-      vList.forEach((v, index) => {
-        v = v.trim();
+    if (brck === '[]' || Array.isArray(p)) {
+      let vArray = Array.isArray(p) ? p : typeof p === 'string' ? p.split(/\s*,\s*/) : [p];
+      vArray.forEach((v, index) => {
         parametersUsed[key + index] = v;
         values.push(v);
         if (index !== 0) {
-          qms += ', ';
+          qms += ',';
         }
         qms += '?';
       });
@@ -154,67 +152,40 @@ function namedParameters2QuestionMarks(sql, parameters) {
     }
     return qms;
   });
-  return { sqlqm, parametersUsed, values };
+  return { sqlQm, parametersUsed, values };
 }
 
-function convertNamedParameterToValues(sql, parameters) {
-  let parametersUsed = {};
-  let values = [];
-
-  let qmSql = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (txt, key, key2) {
-    let p = (parameters[key] || '').trim();
-    let qms = '';
-    if (key2 === '[]') {
-      let vList = p.split(/\s*,\s*/);
-      vList.forEach((v, index) => {
-        v = v.trim();
-        parametersUsed[key + index] = v;
-        values.push(v);
-        if (index !== 0) {
-          qms += ', ';
-        }
-        qms += '?';
-      });
-    } else {
-      parametersUsed[key] = p.trim();
-      values.push(p);
-      qms += '?';
-    }
-    return qms;
-  });
-
-  return { qmSql, values, parametersUsed };
-}
-
-async function processSql_con(con, sql, parameters, maxRows) {
-  parameters = parameters || {};
-  maxRows = maxRows || 10000;
-
+async function processSql_con(con, sql, parameters = {}, maxRows = 10000) {
   Config.sqlLogger.debug('start sql **************************************');
   Config.sqlLogger.debug('sql: %s', sql);
-  let qap = new QueryAndParams(sql, parameters);
-  qap.convertQuery();
-  let names = qap.param_list;
-  parameters = qap.req_params;
+  // let qap = new QueryAndParams(sql, parameters);
+  // qap.convertQuery();
+  // let names = qap.param_list;
+  // parameters = qap.req_params;
+
+  let { sqlQm, values, parametersUsed } = namedParameters2QuestionMarks(sql, parameters);
+
+  values = values.map((v) => (v === undefined || v === null ? '' : v));
+  Config.sqlLogger.info('sql-parametersUsed: ', JSON.stringify(parametersUsed, ' '));
 
   //
   // PREPARE SERVICE_STMT
   //
 
-  let sql_params = [];
-
-  for (let n of names) {
-    if (parameters[n] === undefined) {
-      Config.sqlLogger.info('no value provided for parameter: %s will use empty string', n);
-      sql_params.push('');
-    } else {
-      let v = parameters[n];
-      sql_params.push(v);
-      Config.sqlLogger.info('sql-parameter: %s : %s', n, v);
-    }
-  }
-  result = await processSqlQuery(con, qap.qm_query, sql_params, maxRows);
-  return result;
+  // let sql_params = [];
+  //
+  // for (let n of names) {
+  //   if (parameters[n] === undefined || parameters[n] === null) {
+  //     Config.sqlLogger.info('no value provided for parameter: %s will use empty string', n);
+  //     sql_params.push('');
+  //   } else {
+  //     let v = parameters[n];
+  //     sql_params.push(v);
+  //     Config.sqlLogger.info('sql-parameter: %s : %s', n, v);
+  //   }
+  // }
+  //result = await processSqlQuery(con, qap.qm_query, sql_params, maxRows);
+  return await processSqlQuery(con, sqlQm, values, maxRows);
 }
 
 function processSqlQuery(con, sql, values, maxRows) {
@@ -268,78 +239,77 @@ function processSqlQuery(con, sql, values, maxRows) {
   });
 }
 
-class QueryAndParams {
-  constructor(named_query, req_params) {
-    this.named_query = named_query;
-    this.req_params = req_params;
-  }
-
-  convertQuery() {
-    this.qm_query = '';
-    this.in_param = false;
-
-    this.param_list = [];
-    this.current_param = '';
-
-    let prot = false;
-
-    for (let c of this.named_query) {
-      if (!prot) {
-        if (this.in_param) {
-          if (isalnum(c) || c === '_' || c === '$' || c === '[' || c === ']') {
-            this.current_param += c;
-            continue;
-          } else {
-            this._process_param();
-          }
-        }
-        if (!this.in_param && c === ':') {
-          this.in_param = true;
-          continue;
-        }
-      }
-      if (c === "'") {
-        prot = !prot;
-      }
-      this.qm_query += c;
-    }
-    // end processing
-    if (this.in_param) {
-      this._process_param();
-    }
-    //
-  }
-
-  _process_param() {
-    const param = this.current_param;
-    let param_base = param.substring(0, param.length - 2);
-    let a_value = this.req_params[param_base];
-    if (param.endsWith('[]') || Array.isArray(a_value)) {
-      if (a_value === undefined) {
-        this.param_list.push(param);
-        this.qm_query += '?';
-      } else {
-        let request_values = Array.isArray(a_value) ? a_value : a_value.split(',');
-        let index = 0;
-        for (let request_value of request_values) {
-          let param_indexed = param_base + '[' + index + ']';
-          this.req_params[param_indexed] = request_value;
-          this.param_list.push(param_indexed);
-          if (index === 0) {
-            this.qm_query += '?';
-          } else {
-            this.qm_query += ',?';
-          }
-          index += 1;
-        }
-      }
-    } else {
-      this.param_list.push(param);
-      this.qm_query += '?';
-    }
-    this.current_param = '';
-    this.in_param = false;
-  }
-}
-
-module.exports.QueryAndParams = QueryAndParams;
+// class QueryAndParams {
+//   constructor(named_query, req_params) {
+//     this.named_query = named_query;
+//     this.req_params = req_params;
+//   }
+//
+//   convertQuery() {
+//     this.qm_query = '';
+//     this.in_param = false;
+//
+//     this.param_list = [];
+//     this.current_param = '';
+//
+//     let prot = false;
+//
+//     for (let c of this.named_query) {
+//       if (!prot) {
+//         if (this.in_param) {
+//           if (isalnum(c) || c === '_' || c === '$' || c === '[' || c === ']') {
+//             this.current_param += c;
+//             continue;
+//           } else {
+//             this._process_param();
+//           }
+//         }
+//         if (!this.in_param && c === ':') {
+//           this.in_param = true;
+//           continue;
+//         }
+//       }
+//       if (c === "'") {
+//         prot = !prot;
+//       }
+//       this.qm_query += c;
+//     }
+//     // end processing
+//     if (this.in_param) {
+//       this._process_param();
+//     }
+//     //
+//   }
+//
+//   _process_param() {
+//     const param = this.current_param;
+//     let param_base = param.substring(0, param.length - 2);
+//     let a_value = this.req_params[param_base];
+//     if (param.endsWith('[]') || Array.isArray(a_value)) {
+//       if (a_value === undefined) {
+//         this.param_list.push(param);
+//         this.qm_query += '?';
+//       } else {
+//         let request_values = Array.isArray(a_value) ? a_value : a_value.split(',');
+//         let index = 0;
+//         for (let request_value of request_values) {
+//           let param_indexed = param_base + '[' + index + ']';
+//           this.req_params[param_indexed] = request_value;
+//           this.param_list.push(param_indexed);
+//           if (index === 0) {
+//             this.qm_query += '?';
+//           } else {
+//             this.qm_query += ',?';
+//           }
+//           index += 1;
+//         }
+//       }
+//     } else {
+//       this.param_list.push(param);
+//       this.qm_query += '?';
+//     }
+//     this.current_param = '';
+//     this.in_param = false;
+//   }
+// }
+//
