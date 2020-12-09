@@ -128,10 +128,21 @@ async function processSqlDirect(sql, values = [], maxRows) {
   return result;
 }
 
-function namedParameters2QuestionMarks(sql, parameters) {
+function namedParameters2QuestionMarks(sql, parameters, logger) {
+  let inquote = false;
   let parametersUsed = {};
   let values = [];
-  let sqlQm = sql.replace(/:([0-9a-zA-Z$_]+)(\[?]?)/g, function (mtch, key, brck) {
+  let sqlQm = sql.replace(/:([0-9a-zA-Z$_]+)(\[])?|(')/g, function (mtch, key, brck, quote) {
+    if (logger) {
+      logger(mtch, key, brck, quote);
+    }
+    if (quote) {
+      inquote = !inquote;
+      return mtch;
+    }
+    if (inquote) {
+      return mtch;
+    }
     let p = parameters[key];
     p = typeof p === 'string' ? p.trim() : typeof (p === 'number') ? p : p === null || p === undefined ? '' : p;
     let qms = '';
